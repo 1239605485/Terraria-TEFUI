@@ -67,6 +67,21 @@ static patch_handle_t g_mouse_y_getter = PATCH_NULL;
 static patch_handle_t g_mouse_left_getter = PATCH_NULL;
 static patch_handle_t g_ui_scale_getter = PATCH_NULL;
 
+/* Main.screenWidth/screenHeight are temporarily rewritten while Terraria draws
+   parts of the mobile UI. PlayerInput exposes the real back-buffer dimensions,
+   which are the stable values we need for centering and touch conversion. */
+static patch_handle_t g_real_screen_width_getter = PATCH_NULL;
+static patch_handle_t g_real_screen_height_getter = PATCH_NULL;
+
+/* Terraria mobile uses InControl for touch input. Main.mouseLeft is not a
+   reliable "finger is down" signal on Android, so dragging must use the real
+   touch stream instead of desktop mouse state. */
+static patch_handle_t g_touch_count_getter = PATCH_NULL;
+static patch_handle_t g_touch_getter = PATCH_NULL;
+static patch_handle_t g_touch_finger_id_field = PATCH_NULL;
+static patch_handle_t g_touch_phase_field = PATCH_NULL;
+static patch_handle_t g_touch_position_field = PATCH_NULL;
+
 static bool g_menu_open = false;
 static float g_launcher_scale = 1.0f;
 static float g_close_scale = 1.0f;
@@ -82,9 +97,15 @@ static bool g_dragging_launcher = false;
 static bool g_launcher_moved = false;
 static float g_drag_start_x = 0.0f;
 static float g_drag_start_y = 0.0f;
+static float g_drag_offset_x = 0.0f;
+static float g_drag_offset_y = 0.0f;
+static int g_active_touch_finger = -2147483647;
+static int g_touch_transform = -1;
+static int g_native_click_suppression_frames = 0;
 static bool g_runtime_ready = false;
 static bool g_logged_first_draw = false;
 static bool g_logged_missing_layout = false;
+static bool g_logged_touch_input = false;
 
 static bool valid_handle(patch_handle_t handle) {
     return handle && patchlib_is_valid(handle);
@@ -233,41 +254,62 @@ static float clampf_local(float value, float minimum, float maximum) {
     return value;
 }
 
-/* Terraria renders its GUI in UI coordinates while screenWidth/screenHeight are
-   real-screen coordinates on mobile. UIScale converts between the two. */
+/* At DrawVirtualControls time Main.screenWidth/screenHeight can be a temporary
+   virtual value. Prefer PlayerInput.RealScreenWidth/Height, then convert the
+   physical back-buffer to the coordinate space used by Terraria's GUI. */
 static void get_ui_metrics(float *ui_width, float *ui_height, float *ui_scale,
-                           bool *has_screen_metrics) {
+                           int *physical_width, int *physical_height,
+                           bool *has_physical_metrics) {
     float width = 960.0f;
     float height = 540.0f;
     float scale = 1.0f;
-    bool ok = false;
+    int physical_w = 0;
+    int physical_h = 0;
+    bool physical_ok = false;
 
-    int raw_width = 0;
-    int raw_height = 0;
-    if (read_static_int(g_screen_width_getter, &raw_width) &&
-        read_static_int(g_screen_height_getter, &raw_height) &&
-        raw_width > 0 && raw_height > 0) {
+    int real_width = 0;
+    int real_height = 0;
+    if (read_static_int(g_real_screen_width_getter, &real_width) &&
+        read_static_int(g_real_screen_height_getter, &real_height) &&
+        real_width >= 320 && real_height >= 180) {
         float candidate_scale = 1.0f;
         if (!read_static_float(g_ui_scale_getter, &candidate_scale) ||
-            !isfinite(candidate_scale) || candidate_scale < 0.5f || candidate_scale > 4.0f) {
+            !isfinite(candidate_scale) || candidate_scale < 0.25f || candidate_scale > 4.0f) {
             candidate_scale = 1.0f;
         }
         scale = candidate_scale;
-        width = (float)raw_width / scale;
-        height = (float)raw_height / scale;
+        width = (float)real_width / scale;
+        height = (float)real_height / scale;
         if (!isfinite(width) || !isfinite(height) || width < 320.0f || height < 180.0f ||
             width > 10000.0f || height > 10000.0f) {
-            width = (float)raw_width;
-            height = (float)raw_height;
+            width = (float)real_width;
+            height = (float)real_height;
             scale = 1.0f;
         }
-        ok = true;
+        physical_w = real_width;
+        physical_h = real_height;
+        physical_ok = true;
+    } else {
+        /* Drawing must remain available even if the optional PlayerInput helper
+           cannot be resolved. Main's dimensions are only used when they look
+           like a real UI surface; tiny temporary values are deliberately
+           rejected instead of shoving the launcher against the left edge. */
+        int main_width = 0;
+        int main_height = 0;
+        if (read_static_int(g_screen_width_getter, &main_width) &&
+            read_static_int(g_screen_height_getter, &main_height) &&
+            main_width >= 320 && main_height >= 180) {
+            width = (float)main_width;
+            height = (float)main_height;
+        }
     }
 
     if (ui_width) *ui_width = width;
     if (ui_height) *ui_height = height;
     if (ui_scale) *ui_scale = scale;
-    if (has_screen_metrics) *has_screen_metrics = ok;
+    if (physical_width) *physical_width = physical_w;
+    if (physical_height) *physical_height = physical_h;
+    if (has_physical_metrics) *has_physical_metrics = physical_ok;
 }
 
 static bool get_pointer(float ui_scale, float *x, float *y, bool *down) {
@@ -283,6 +325,144 @@ static bool get_pointer(float ui_scale, float *x, float *y, bool *down) {
     if (x) *x = (float)raw_x / ui_scale;
     if (y) *y = (float)raw_y / ui_scale;
     if (down) *down = raw_down;
+    return true;
+}
+
+typedef struct touch_sample_t {
+    int finger_id;
+    int phase;
+    vector2_t position;
+} touch_sample_t;
+
+static bool point_in_button(float px, float py, float x, float y,
+                            float width, float height);
+
+enum {
+    TOUCH_PHASE_BEGAN = 0,
+    TOUCH_PHASE_MOVED = 1,
+    TOUCH_PHASE_STATIONARY = 2,
+    TOUCH_PHASE_ENDED = 3,
+    TOUCH_PHASE_CANCELED = 4,
+
+    /* InControl.Touch.position normally uses Unity's bottom-left physical pixel
+       space. Alternative mappings are kept because Terraria's Android wrapper
+       can expose already-transformed positions on some builds. */
+    TOUCH_MAP_SCALED_BOTTOM_LEFT = 0,
+    TOUCH_MAP_SCALED_TOP_LEFT = 1,
+    TOUCH_MAP_RAW_BOTTOM_LEFT = 2,
+    TOUCH_MAP_RAW_TOP_LEFT = 3
+};
+
+static bool mobile_touch_ready(void) {
+    return valid_handle(g_touch_count_getter) && valid_handle(g_touch_getter) &&
+           valid_handle(g_touch_finger_id_field) && valid_handle(g_touch_phase_field) &&
+           valid_handle(g_touch_position_field);
+}
+
+static int get_mobile_touch_count(void) {
+    if (!mobile_touch_ready()) return 0;
+    int count = 0;
+    if (!patchlib_method_invoke_args(g_touch_count_getter, PATCH_NULL, &count, NULL)) return 0;
+    if (count < 0) return 0;
+    if (count > 16) count = 16;
+    return count;
+}
+
+static bool get_mobile_touch(int index, touch_sample_t *sample) {
+    if (!sample || index < 0 || !mobile_touch_ready()) return false;
+
+    patch_handle_t touch = PATCH_NULL;
+    void *args[] = {&index};
+    if (!patchlib_method_invoke_args(g_touch_getter, PATCH_NULL, &touch, args) || !touch) {
+        return false;
+    }
+
+    memset(sample, 0, sizeof(*sample));
+    patchlib_field_get_value(g_touch_finger_id_field, touch, &sample->finger_id);
+    patchlib_field_get_value(g_touch_phase_field, touch, &sample->phase);
+    patchlib_field_get_value(g_touch_position_field, touch, &sample->position);
+    return isfinite(sample->position.x) && isfinite(sample->position.y);
+}
+
+static bool touch_is_active(const touch_sample_t *sample) {
+    return sample && sample->phase >= TOUCH_PHASE_BEGAN &&
+           sample->phase <= TOUCH_PHASE_STATIONARY;
+}
+
+static bool map_touch_position(const touch_sample_t *sample, int transform,
+                               float ui_width, float ui_height,
+                               int physical_width, int physical_height,
+                               float *x, float *y) {
+    if (!sample || !x || !y || ui_width <= 0.0f || ui_height <= 0.0f) return false;
+
+    float mapped_x = sample->position.x;
+    float mapped_y = sample->position.y;
+    if (transform == TOUCH_MAP_SCALED_BOTTOM_LEFT ||
+        transform == TOUCH_MAP_SCALED_TOP_LEFT) {
+        if (physical_width <= 0 || physical_height <= 0) return false;
+        mapped_x = sample->position.x * ui_width / (float)physical_width;
+        if (transform == TOUCH_MAP_SCALED_BOTTOM_LEFT) {
+            mapped_y = ((float)physical_height - sample->position.y) *
+                       ui_height / (float)physical_height;
+        } else {
+            mapped_y = sample->position.y * ui_height / (float)physical_height;
+        }
+    } else if (transform == TOUCH_MAP_RAW_BOTTOM_LEFT) {
+        if (physical_height <= 0) return false;
+        mapped_y = (float)physical_height - sample->position.y;
+    }
+
+    if (!isfinite(mapped_x) || !isfinite(mapped_y)) return false;
+    *x = mapped_x;
+    *y = mapped_y;
+    return true;
+}
+
+static bool choose_touch_transform(const touch_sample_t *sample,
+                                   float launcher_x, float launcher_y,
+                                   float ui_width, float ui_height,
+                                   int physical_width, int physical_height,
+                                   int *transform, float *x, float *y) {
+    if (!sample || !transform || !x || !y) return false;
+
+    /* Try the native Unity physical-pixel mapping first. The other candidates
+       make the interaction tolerant of wrappers that already flip or scale Y. */
+    const int candidates[] = {
+        TOUCH_MAP_SCALED_BOTTOM_LEFT,
+        TOUCH_MAP_SCALED_TOP_LEFT,
+        TOUCH_MAP_RAW_BOTTOM_LEFT,
+        TOUCH_MAP_RAW_TOP_LEFT
+    };
+    float best_distance = 1.0e30f;
+    bool found = false;
+    int best_transform = -1;
+    float best_x = 0.0f;
+    float best_y = 0.0f;
+
+    for (unsigned i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        float px = 0.0f;
+        float py = 0.0f;
+        if (!map_touch_position(sample, candidates[i], ui_width, ui_height,
+                                physical_width, physical_height, &px, &py)) {
+            continue;
+        }
+        if (!point_in_button(px, py, launcher_x, launcher_y, 220.0f, 70.0f)) continue;
+        const float dx = px - launcher_x;
+        const float dy = py - launcher_y;
+        const float distance = dx * dx + dy * dy;
+        if (!found || distance < best_distance) {
+            found = true;
+            best_distance = distance;
+            best_transform = candidates[i];
+            best_x = px;
+            best_y = py;
+        }
+    }
+
+    if (!found) return false;
+    *transform = best_transform;
+    *x = best_x;
+    *y = best_y;
     return true;
 }
 
@@ -307,66 +487,131 @@ static void draw_menu(void) {
     float ui_width = 960.0f;
     float ui_height = 540.0f;
     float ui_scale = 1.0f;
-    bool has_screen_metrics = false;
-    get_ui_metrics(&ui_width, &ui_height, &ui_scale, &has_screen_metrics);
+    int physical_width = 0;
+    int physical_height = 0;
+    bool has_physical_metrics = false;
+    get_ui_metrics(&ui_width, &ui_height, &ui_scale,
+                   &physical_width, &physical_height, &has_physical_metrics);
 
     float launcher_x = g_launcher_x_ratio * ui_width;
     float launcher_y = g_launcher_y_ratio * ui_height;
     launcher_x = clampf_local(launcher_x, 95.0f, fmaxf(95.0f, ui_width - 95.0f));
     launcher_y = clampf_local(launcher_y, 30.0f, fmaxf(30.0f, ui_height - 30.0f));
 
-    float pointer_x = 0.0f;
-    float pointer_y = 0.0f;
-    bool pointer_down = false;
-    const bool has_pointer = get_pointer(ui_scale, &pointer_x, &pointer_y, &pointer_down);
-    bool suppress_release_click = false;
+    /* Android interaction path: use InControl's actual touch stream. This is
+       intentionally independent from Main.mouseLeft, which remains false for
+       many mobile touches even though GUI buttons can still see the finger. */
+    const int touch_count = has_physical_metrics ? get_mobile_touch_count() : 0;
+    bool active_touch_found = false;
+    bool touch_released_this_frame = false;
 
-    if (has_pointer) {
-        if (pointer_down && !g_pointer_was_down &&
-            point_in_button(pointer_x, pointer_y, launcher_x, launcher_y, 190.0f, 46.0f)) {
-            g_dragging_launcher = true;
-            g_launcher_moved = false;
-            g_drag_start_x = pointer_x;
-            g_drag_start_y = pointer_y;
+    if (g_dragging_launcher && g_active_touch_finger != -2147483647) {
+        for (int i = 0; i < touch_count; ++i) {
+            touch_sample_t sample;
+            if (!get_mobile_touch(i, &sample) || sample.finger_id != g_active_touch_finger) continue;
+            active_touch_found = true;
+            if (touch_is_active(&sample)) {
+                float pointer_x = 0.0f;
+                float pointer_y = 0.0f;
+                if (map_touch_position(&sample, g_touch_transform,
+                                       ui_width, ui_height,
+                                       physical_width, physical_height,
+                                       &pointer_x, &pointer_y)) {
+                    const float move_x = pointer_x - g_drag_start_x;
+                    const float move_y = pointer_y - g_drag_start_y;
+                    if (move_x * move_x + move_y * move_y > 144.0f) {
+                        g_launcher_moved = true;
+                    }
+
+                    launcher_x = clampf_local(pointer_x + g_drag_offset_x,
+                                              95.0f, fmaxf(95.0f, ui_width - 95.0f));
+                    launcher_y = clampf_local(pointer_y + g_drag_offset_y,
+                                              30.0f, fmaxf(30.0f, ui_height - 30.0f));
+                    g_launcher_x_ratio = ui_width > 0.0f ? launcher_x / ui_width : 0.5f;
+                    g_launcher_y_ratio = ui_height > 0.0f ? launcher_y / ui_height : 0.5f;
+                }
+            } else {
+                touch_released_this_frame = true;
+            }
+            break;
         }
-        if (pointer_down && g_dragging_launcher) {
-            const float move_x = pointer_x - g_drag_start_x;
-            const float move_y = pointer_y - g_drag_start_y;
-            if (move_x * move_x + move_y * move_y > 64.0f) g_launcher_moved = true;
-            g_launcher_x_ratio = clampf_local(pointer_x / ui_width, 0.04f, 0.96f);
-            g_launcher_y_ratio = clampf_local(pointer_y / ui_height, 0.05f, 0.95f);
-            launcher_x = g_launcher_x_ratio * ui_width;
-            launcher_y = g_launcher_y_ratio * ui_height;
-        }
-        if (!pointer_down && g_pointer_was_down && g_dragging_launcher) {
-            suppress_release_click = g_launcher_moved;
+
+        /* Ended touches may disappear from TouchManager immediately. Missing
+           the tracked finger therefore also means release. */
+        if (!active_touch_found) touch_released_this_frame = true;
+
+        if (touch_released_this_frame) {
             if (!g_launcher_moved) g_menu_open = !g_menu_open;
             g_dragging_launcher = false;
             g_launcher_moved = false;
+            g_active_touch_finger = -2147483647;
+            g_touch_transform = -1;
+            g_native_click_suppression_frames = 3;
         }
-        g_pointer_was_down = pointer_down;
+    }
+
+    if (!g_dragging_launcher && !touch_released_this_frame) {
+        for (int i = 0; i < touch_count; ++i) {
+            touch_sample_t sample;
+            if (!get_mobile_touch(i, &sample) || !touch_is_active(&sample)) continue;
+
+            int transform = -1;
+            float pointer_x = 0.0f;
+            float pointer_y = 0.0f;
+            if (!choose_touch_transform(&sample, launcher_x, launcher_y,
+                                        ui_width, ui_height,
+                                        physical_width, physical_height,
+                                        &transform, &pointer_x, &pointer_y)) {
+                continue;
+            }
+
+            g_dragging_launcher = true;
+            g_launcher_moved = false;
+            g_active_touch_finger = sample.finger_id;
+            g_touch_transform = transform;
+            g_drag_start_x = pointer_x;
+            g_drag_start_y = pointer_y;
+            g_drag_offset_x = launcher_x - pointer_x;
+            g_drag_offset_y = launcher_y - pointer_y;
+            g_launcher_down = false;
+
+            if (!g_logged_touch_input) {
+                if (mod_logger_write) {
+                    mod_logger_write(MOD_LOG_LEVEL_INFO, "TEFUI",
+                                     "Mobile touch acquired: finger=%d map=%d pos=(%.1f,%.1f)",
+                                     sample.finger_id, transform, pointer_x, pointer_y);
+                }
+                g_logged_touch_input = true;
+            }
+            break;
+        }
     }
 
     /* Keep the launcher ASCII-only so it remains visible even if a custom font
        pack has not yet injected CJK glyphs. The actual menu contents are Chinese. */
     const bool launcher_pressed = draw_text_button(
         button_layout, g_menu_open ? "TEFUI [X]" : "TEFUI",
-        launcher_x, launcher_y, 190.0f, 46.0f, &g_launcher_scale, false);
+        launcher_x, launcher_y, 190.0f, 46.0f, &g_launcher_scale,
+        g_dragging_launcher || g_menu_open);
 
-    /* Fallback interaction for builds where mouse getters are unavailable. */
-    if (!has_pointer && pressed_once(launcher_pressed, &g_launcher_down) &&
-        !suppress_release_click) {
+    /* Never discard GUIStringButton's own click result merely because mouse
+       getters exist. That was the v0.1.6 tap regression on Android. Native GUI
+       input is the fallback when TouchManager is unavailable and also keeps
+       keyboard/mouse builds usable. */
+    const bool native_click = pressed_once(launcher_pressed, &g_launcher_down);
+    const bool suppress_native_click = g_dragging_launcher ||
+        g_native_click_suppression_frames > 0;
+    if (native_click && !suppress_native_click) {
         g_menu_open = !g_menu_open;
-    } else if (has_pointer) {
-        g_launcher_down = false;
     }
+    if (g_native_click_suppression_frames > 0) --g_native_click_suppression_frames;
 
     if (!g_logged_first_draw) {
         if (mod_logger_write) {
             mod_logger_write(MOD_LOG_LEVEL_INFO, "TEFUI",
-                             "First draw: ui=%.1fx%.1f scale=%.3f metrics=%d pointer=%d launcher=(%.1f,%.1f)",
-                             ui_width, ui_height, ui_scale,
-                             has_screen_metrics ? 1 : 0, has_pointer ? 1 : 0,
+                             "First draw: ui=%.1fx%.1f real=%dx%d scale=%.3f physical=%d touch=%d launcher=(%.1f,%.1f)",
+                             ui_width, ui_height, physical_width, physical_height, ui_scale,
+                             has_physical_metrics ? 1 : 0, mobile_touch_ready() ? 1 : 0,
                              launcher_x, launcher_y);
         }
         g_logged_first_draw = true;
@@ -466,6 +711,37 @@ static bool resolve_runtime(void) {
         ? patchlib_type_get_method_by_param_count(main_type, "get_UIScale", 0)
         : PATCH_NULL;
 
+    /* Stable screen metrics. Main.screenWidth/screenHeight are temporarily
+       changed inside Terraria's mobile control draw path. */
+    patch_handle_t player_input_type =
+        patchlib_type_get_type("Terraria.GameInput", "PlayerInput");
+    g_real_screen_width_getter = player_input_type
+        ? patchlib_type_get_method_by_param_count(player_input_type, "get_RealScreenWidth", 0)
+        : PATCH_NULL;
+    g_real_screen_height_getter = player_input_type
+        ? patchlib_type_get_method_by_param_count(player_input_type, "get_RealScreenHeight", 0)
+        : PATCH_NULL;
+
+    /* Native Android touch stream used by Terraria/InControl. These are all
+       optional so UI drawing still works if a later game build renames them. */
+    patch_handle_t touch_manager_type = patchlib_type_get_type("InControl", "TouchManager");
+    patch_handle_t touch_type = patchlib_type_get_type("InControl", "Touch");
+    g_touch_count_getter = touch_manager_type
+        ? patchlib_type_get_method_by_param_count(touch_manager_type, "get_TouchCount", 0)
+        : PATCH_NULL;
+    g_touch_getter = touch_manager_type
+        ? patchlib_type_get_method_by_param_count(touch_manager_type, "GetTouch", 1)
+        : PATCH_NULL;
+    g_touch_finger_id_field = touch_type
+        ? patchlib_type_get_field(touch_type, "fingerId")
+        : PATCH_NULL;
+    g_touch_phase_field = touch_type
+        ? patchlib_type_get_field(touch_type, "phase")
+        : PATCH_NULL;
+    g_touch_position_field = touch_type
+        ? patchlib_type_get_field(touch_type, "position")
+        : PATCH_NULL;
+
     g_settings_layout_type = patchlib_type_get_type("", "SettingsOverlay_Layout");
     g_string_button_type = patchlib_type_get_type("", "GUIStringButton");
     g_string_button_layout_type = patchlib_type_get_type("", "StringButton_Layout");
@@ -534,8 +810,11 @@ static bool resolve_runtime(void) {
     if (mod_logger_write) {
         mod_logger_write(g_draw_hook != PATCH_HOOK_INVALID_ID ? MOD_LOG_LEVEL_INFO : MOD_LOG_LEVEL_ERROR,
                          "TEFUI",
-                         "DrawVirtualControls hook %s; screen=%d mouse=%d UIScale=%d",
+                         "DrawVirtualControls hook %s; realScreen=%d touch=%d MainScreen=%d mouse=%d UIScale=%d",
                          g_draw_hook != PATCH_HOOK_INVALID_ID ? "installed" : "failed",
+                         valid_handle(g_real_screen_width_getter) &&
+                             valid_handle(g_real_screen_height_getter),
+                         mobile_touch_ready(),
                          valid_handle(g_screen_width_getter) && valid_handle(g_screen_height_getter),
                          valid_handle(g_mouse_x_getter) && valid_handle(g_mouse_y_getter) &&
                              valid_handle(g_mouse_left_getter),
@@ -565,10 +844,18 @@ bool tefui_ui_initialize(void) {
     g_pointer_was_down = false;
     g_dragging_launcher = false;
     g_launcher_moved = false;
+    g_drag_start_x = 0.0f;
+    g_drag_start_y = 0.0f;
+    g_drag_offset_x = 0.0f;
+    g_drag_offset_y = 0.0f;
+    g_active_touch_finger = -2147483647;
+    g_touch_transform = -1;
+    g_native_click_suppression_frames = 0;
     g_launcher_x_ratio = 0.5f;
     g_launcher_y_ratio = 0.5f;
     g_logged_first_draw = false;
     g_logged_missing_layout = false;
+    g_logged_touch_input = false;
 
     if (!api_ready()) {
         if (mod_logger_write) {
@@ -592,6 +879,11 @@ bool tefui_ui_initialize(void) {
 bool tefui_ui_cleanup(void) {
     g_runtime_ready = false;
     g_menu_open = false;
+    g_dragging_launcher = false;
+    g_launcher_moved = false;
+    g_active_touch_finger = -2147483647;
+    g_touch_transform = -1;
+    g_native_click_suppression_frames = 0;
     if (g_draw_hook != PATCH_HOOK_INVALID_ID) {
         patchlib_uninstall_hook(g_draw_hook);
         g_draw_hook = PATCH_HOOK_INVALID_ID;

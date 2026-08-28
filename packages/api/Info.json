@@ -1,0 +1,31 @@
+{
+  "pkgId": "eternal.future.tefui.api",
+  "name": "TEFUI API",
+  "author": "TEFUI Contributors",
+  "description": "TEFUI shared option registry and cross-mod API",
+  "version": "0.1.0",
+  "versionCode": 100,
+  "detailedInformationURL": "",
+  "dependence": [],
+  "support": {
+    "android": {
+      "arm64": true,
+      "arm": false
+    },
+    "windows": {
+      "x64": false,
+      "x86": false
+    },
+    "linux": {
+      "x64": false,
+      "x86": false
+    },
+    "mac": {
+      "x64": false,
+      "arm64": false
+    },
+    "ios": {
+      "arm64": false
+    }
+  }
+}

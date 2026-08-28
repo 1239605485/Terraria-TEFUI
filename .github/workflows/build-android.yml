@@ -1,1 +1,38 @@
-1
+name: Build Android ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "plugin/**"
+      - "module/**"
+      - "include/**"
+      - ".github/workflows/build-android.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch TEFKernel API headers
+        run: git clone --depth 1 https://github.com/eternalfuture-e38299/TEFKernel.git vendor/tefkernel
+      - name: Build API Plugin
+        run: |
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
+            -O2 -fPIC -fvisibility=hidden -Wall -Wextra -Werror \
+            -Iinclude -Ivendor/tefkernel/include -shared plugin/plugin.c -lm \
+            vendor/tefkernel/include/tef_api_imp.c \
+            -o libplugin.android.arm64.so
+      - name: Build Runtime Module
+        run: |
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
+            -O2 -fPIC -fvisibility=hidden -Wall -Wextra -Werror \
+            -Iinclude -Ivendor/tefkernel/include -shared module/module.c \
+            vendor/tefkernel/include/tef_api_imp.c \
+            -o libmodule.android.arm64.so
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TEFUI-android-arm64
+          path: |
+            libplugin.android.arm64.so
+            libmodule.android.arm64.so

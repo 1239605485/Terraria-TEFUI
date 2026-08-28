@@ -29,8 +29,7 @@ typedef struct vector2_t {
 
 enum {
     CONTROL_ANCHOR_SCREEN = 0,
-    ANCHOR_TOP_CENTRE = 10,
-    ANCHOR_CENTRE_BOTH = 18
+    ANCHOR_TOP_LEFT = 9
 };
 
 static patch_hook_id_t g_draw_hook = PATCH_HOOK_INVALID_ID;
@@ -192,8 +191,8 @@ static void draw_menu(void) {
     if (!button_layout) return;
 
     const bool launcher_pressed = draw_text_button(
-        button_layout, g_menu_open ? "TEFUI [X]" : "TEFUI",
-        0.0f, 118.0f, 170.0f, 46.0f, ANCHOR_TOP_CENTRE);
+        button_layout, g_menu_open ? "模组菜单 [X]" : "模组菜单",
+        1024.0f, 130.0f, 220.0f, 46.0f, ANCHOR_TOP_LEFT);
     if (pressed_once(launcher_pressed, &g_launcher_down)) {
         g_menu_open = !g_menu_open;
     }
@@ -201,7 +200,7 @@ static void draw_menu(void) {
 
     patch_handle_t slider_layout = get_borrowed_slider_layout();
     const int option_count = tefui_get_option_count();
-    float y = -120.0f;
+    float y = 310.0f;
 
     for (int i = 0; i < option_count && i < TEFUI_MAX_OPTIONS; ++i) {
         tefui_option_snapshot_t option;
@@ -210,18 +209,18 @@ static void draw_menu(void) {
 
         char line[TEFUI_LABEL_CAPACITY + 48];
         if (option.type == TEFUI_OPTION_TOGGLE) {
-            snprintf(line, sizeof(line), "%s: %s", option.label,
-                     option.bool_value ? "ON" : "OFF");
+            snprintf(line, sizeof(line), "%s：%s", option.label,
+                     option.bool_value ? "开启" : "关闭");
             const bool option_pressed = draw_text_button(
-                button_layout, line, 0.0f, y, 420.0f, 46.0f, ANCHOR_CENTRE_BOTH);
+                button_layout, line, 1024.0f, y, 460.0f, 46.0f, ANCHOR_TOP_LEFT);
             if (pressed_once(option_pressed, &g_option_down[i])) {
                 tefui_set_bool(option.owner_id, option.option_id, !option.bool_value);
             }
             y += 54.0f;
         } else if (option.type == TEFUI_OPTION_SLIDER) {
-            snprintf(line, sizeof(line), "%s: %.1f", option.label, option.float_value);
-            (void)draw_text_button(button_layout, line, 0.0f, y, 420.0f, 40.0f,
-                                   ANCHOR_CENTRE_BOTH);
+            snprintf(line, sizeof(line), "%s：%.1f", option.label, option.float_value);
+            (void)draw_text_button(button_layout, line, 1024.0f, y, 460.0f, 40.0f,
+                                   ANCHOR_TOP_LEFT);
             y += 42.0f;
             if (slider_layout) {
                 float range = option.max_value - option.min_value;
@@ -230,7 +229,7 @@ static void draw_menu(void) {
                     : 0.0f;
                 if (normalized < 0.0f) normalized = 0.0f;
                 if (normalized > 1.0f) normalized = 1.0f;
-                if (draw_slider(slider_layout, 0.0f, y, ANCHOR_CENTRE_BOTH,
+                if (draw_slider(slider_layout, 1024.0f, y, ANCHOR_TOP_LEFT,
                                 &normalized)) {
                     const float value = option.min_value + normalized * range;
                     tefui_set_float(option.owner_id, option.option_id, value);
@@ -241,7 +240,7 @@ static void draw_menu(void) {
     }
 
     const bool close_pressed = draw_text_button(
-        button_layout, "Close", 0.0f, y, 180.0f, 44.0f, ANCHOR_CENTRE_BOTH);
+        button_layout, "关闭菜单", 1024.0f, y, 200.0f, 44.0f, ANCHOR_TOP_LEFT);
     if (pressed_once(close_pressed, &g_close_down)) {
         g_menu_open = false;
     }
@@ -343,8 +342,8 @@ bool tefui_ui_initialize(void) {
         return false;
     }
 
-    tefui_register_toggle("tefui.demo", "test_toggle", "Test toggle", true);
-    tefui_register_slider("tefui.demo", "test_slider", "Test slider",
+    tefui_register_toggle("tefui.demo", "test_toggle", "测试开关", true);
+    tefui_register_slider("tefui.demo", "test_slider", "测试滑块",
                           0.0f, 100.0f, 1.0f, 50.0f);
 
     g_runtime_ready = resolve_runtime();

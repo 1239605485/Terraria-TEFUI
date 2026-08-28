@@ -55,11 +55,23 @@ static patch_handle_t g_slider_anchor_control_field = PATCH_NULL;
 static patch_handle_t g_slider_anchor_field = PATCH_NULL;
 static patch_handle_t g_drag_state_type = PATCH_NULL;
 static patch_handle_t g_drag_state = PATCH_NULL;
+static patch_handle_t g_screen_width_getter = PATCH_NULL;
+static patch_handle_t g_screen_height_getter = PATCH_NULL;
+static patch_handle_t g_mouse_x_getter = PATCH_NULL;
+static patch_handle_t g_mouse_y_getter = PATCH_NULL;
+static patch_handle_t g_mouse_left_getter = PATCH_NULL;
 
 static bool g_menu_open = false;
 static bool g_launcher_down = false;
 static bool g_close_down = false;
 static bool g_option_down[TEFUI_MAX_OPTIONS];
+static float g_launcher_x_ratio = 0.5f;
+static float g_launcher_y_ratio = 0.5f;
+static bool g_pointer_was_down = false;
+static bool g_dragging_launcher = false;
+static bool g_launcher_moved = false;
+static float g_drag_start_x = 0.0f;
+static float g_drag_start_y = 0.0f;
 static bool g_runtime_ready = false;
 
 static bool valid_handle(patch_handle_t handle) {
@@ -186,21 +198,83 @@ static bool pressed_once(bool pressed, bool *was_pressed) {
     return fire;
 }
 
+static bool read_static_int(patch_handle_t getter, int *output) {
+    return output && valid_handle(getter) &&
+           patchlib_method_invoke_args(getter, PATCH_NULL, output, NULL);
+}
+
+static bool read_static_bool(patch_handle_t getter, bool *output) {
+    return output && valid_handle(getter) &&
+           patchlib_method_invoke_args(getter, PATCH_NULL, output, NULL);
+}
+
+static float clamp_ratio(float value) {
+    if (value < 0.06f) return 0.06f;
+    if (value > 0.94f) return 0.94f;
+    return value;
+}
+
 static void draw_menu(void) {
     patch_handle_t button_layout = get_borrowed_button_layout();
     if (!button_layout) return;
 
+    int screen_width = 0;
+    int screen_height = 0;
+    int mouse_x = 0;
+    int mouse_y = 0;
+    bool mouse_down = false;
+    if (!read_static_int(g_screen_width_getter, &screen_width) ||
+        !read_static_int(g_screen_height_getter, &screen_height) ||
+        screen_width <= 0 || screen_height <= 0) {
+        return;
+    }
+    (void)read_static_int(g_mouse_x_getter, &mouse_x);
+    (void)read_static_int(g_mouse_y_getter, &mouse_y);
+    (void)read_static_bool(g_mouse_left_getter, &mouse_down);
+
+    float launcher_x = g_launcher_x_ratio * (float)screen_width;
+    float launcher_y = g_launcher_y_ratio * (float)screen_height;
+    bool suppress_release_click = false;
+
+    if (mouse_down && !g_pointer_was_down) {
+        const float dx = (float)mouse_x - launcher_x;
+        const float dy = (float)mouse_y - launcher_y;
+        if (dx >= -110.0f && dx <= 110.0f && dy >= -28.0f && dy <= 28.0f) {
+            g_dragging_launcher = true;
+            g_launcher_moved = false;
+            g_drag_start_x = (float)mouse_x;
+            g_drag_start_y = (float)mouse_y;
+        }
+    }
+    if (mouse_down && g_dragging_launcher) {
+        const float move_x = (float)mouse_x - g_drag_start_x;
+        const float move_y = (float)mouse_y - g_drag_start_y;
+        if (move_x * move_x + move_y * move_y > 64.0f) g_launcher_moved = true;
+        g_launcher_x_ratio = clamp_ratio((float)mouse_x / (float)screen_width);
+        g_launcher_y_ratio = clamp_ratio((float)mouse_y / (float)screen_height);
+        launcher_x = g_launcher_x_ratio * (float)screen_width;
+        launcher_y = g_launcher_y_ratio * (float)screen_height;
+    }
+    if (!mouse_down && g_pointer_was_down && g_dragging_launcher) {
+        suppress_release_click = g_launcher_moved;
+        g_dragging_launcher = false;
+        g_launcher_moved = false;
+    }
+    g_pointer_was_down = mouse_down;
+
     const bool launcher_pressed = draw_text_button(
         button_layout, g_menu_open ? "模组菜单 [X]" : "模组菜单",
-        1024.0f, 130.0f, 220.0f, 46.0f, ANCHOR_TOP_LEFT);
-    if (pressed_once(launcher_pressed, &g_launcher_down)) {
+        launcher_x, launcher_y, 220.0f, 46.0f, ANCHOR_TOP_LEFT);
+    if (pressed_once(launcher_pressed, &g_launcher_down) &&
+        !g_dragging_launcher && !suppress_release_click) {
         g_menu_open = !g_menu_open;
     }
     if (!g_menu_open || !api_ready()) return;
 
     patch_handle_t slider_layout = get_borrowed_slider_layout();
     const int option_count = tefui_get_option_count();
-    float y = 310.0f;
+    const float menu_x = (float)screen_width * 0.5f;
+    float y = (float)screen_height * 0.32f;
 
     for (int i = 0; i < option_count && i < TEFUI_MAX_OPTIONS; ++i) {
         tefui_option_snapshot_t option;
@@ -212,14 +286,14 @@ static void draw_menu(void) {
             snprintf(line, sizeof(line), "%s：%s", option.label,
                      option.bool_value ? "开启" : "关闭");
             const bool option_pressed = draw_text_button(
-                button_layout, line, 1024.0f, y, 460.0f, 46.0f, ANCHOR_TOP_LEFT);
+                button_layout, line, menu_x, y, 460.0f, 46.0f, ANCHOR_TOP_LEFT);
             if (pressed_once(option_pressed, &g_option_down[i])) {
                 tefui_set_bool(option.owner_id, option.option_id, !option.bool_value);
             }
             y += 54.0f;
         } else if (option.type == TEFUI_OPTION_SLIDER) {
             snprintf(line, sizeof(line), "%s：%.1f", option.label, option.float_value);
-            (void)draw_text_button(button_layout, line, 1024.0f, y, 460.0f, 40.0f,
+            (void)draw_text_button(button_layout, line, menu_x, y, 460.0f, 40.0f,
                                    ANCHOR_TOP_LEFT);
             y += 42.0f;
             if (slider_layout) {
@@ -229,7 +303,7 @@ static void draw_menu(void) {
                     : 0.0f;
                 if (normalized < 0.0f) normalized = 0.0f;
                 if (normalized > 1.0f) normalized = 1.0f;
-                if (draw_slider(slider_layout, 1024.0f, y, ANCHOR_TOP_LEFT,
+                if (draw_slider(slider_layout, menu_x, y, ANCHOR_TOP_LEFT,
                                 &normalized)) {
                     const float value = option.min_value + normalized * range;
                     tefui_set_float(option.owner_id, option.option_id, value);
@@ -240,7 +314,7 @@ static void draw_menu(void) {
     }
 
     const bool close_pressed = draw_text_button(
-        button_layout, "关闭菜单", 1024.0f, y, 200.0f, 44.0f, ANCHOR_TOP_LEFT);
+        button_layout, "关闭菜单", menu_x, y, 200.0f, 44.0f, ANCHOR_TOP_LEFT);
     if (pressed_once(close_pressed, &g_close_down)) {
         g_menu_open = false;
     }
@@ -261,6 +335,21 @@ static bool resolve_runtime(void) {
     patch_handle_t draw_virtual_controls = main_type
         ? patchlib_type_get_method_by_param_count(main_type, "DrawVirtualControls", 0)
         : PATCH_NULL;
+    g_screen_width_getter = main_type
+        ? patchlib_type_get_method_by_param_count(main_type, "get_screenWidth", 0)
+        : PATCH_NULL;
+    g_screen_height_getter = main_type
+        ? patchlib_type_get_method_by_param_count(main_type, "get_screenHeight", 0)
+        : PATCH_NULL;
+    g_mouse_x_getter = main_type
+        ? patchlib_type_get_method_by_param_count(main_type, "get_mouseX", 0)
+        : PATCH_NULL;
+    g_mouse_y_getter = main_type
+        ? patchlib_type_get_method_by_param_count(main_type, "get_mouseY", 0)
+        : PATCH_NULL;
+    g_mouse_left_getter = main_type
+        ? patchlib_type_get_method_by_param_count(main_type, "get_mouseLeft", 0)
+        : PATCH_NULL;
 
     g_settings_layout_type = patchlib_type_get_type("", "SettingsOverlay_Layout");
     g_string_button_type = patchlib_type_get_type("", "GUIStringButton");
@@ -273,7 +362,10 @@ static bool resolve_runtime(void) {
     patch_handle_t settings_slider_layout_type =
         patchlib_type_get_type("", "SettingsOverlaySlider_Layout");
 
-    if (!valid_handle(draw_virtual_controls) || !valid_handle(g_settings_layout_type) ||
+    if (!valid_handle(draw_virtual_controls) || !valid_handle(g_screen_width_getter) ||
+        !valid_handle(g_screen_height_getter) || !valid_handle(g_mouse_x_getter) ||
+        !valid_handle(g_mouse_y_getter) || !valid_handle(g_mouse_left_getter) ||
+        !valid_handle(g_settings_layout_type) ||
         !valid_handle(g_string_button_type) || !valid_handle(g_string_button_layout_type) ||
         !valid_handle(g_gui_slider_type) || !valid_handle(g_slider_layout_type) ||
         !valid_handle(g_drag_state_type) || !valid_handle(settings_slider_layout_type)) {
@@ -336,6 +428,11 @@ bool tefui_ui_initialize(void) {
     memset(g_option_down, 0, sizeof(g_option_down));
     g_launcher_down = false;
     g_close_down = false;
+    g_pointer_was_down = false;
+    g_dragging_launcher = false;
+    g_launcher_moved = false;
+    g_launcher_x_ratio = 0.5f;
+    g_launcher_y_ratio = 0.5f;
 
     if (!api_ready()) {
         fprintf(stderr, "[TEFUI] API plugin symbols are unavailable or incompatible.\n");

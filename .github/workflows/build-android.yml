@@ -1,38 +1,39 @@
-name: Build Android ARM64
+name: Build TEFUI Android ARM64
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "plugin/**"
-      - "module/**"
-      - "include/**"
-      - ".github/workflows/build-android.yml"
+    branches: [ main ]
 
 jobs:
-  build:
+  android-arm64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch TEFKernel API headers
-        run: git clone --depth 1 https://github.com/eternalfuture-e38299/TEFKernel.git vendor/tefkernel
-      - name: Build API Plugin
-        run: |
-          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
-            -O2 -fPIC -fvisibility=hidden -Wall -Wextra -Werror \
-            -Iinclude -Ivendor/tefkernel/include -shared plugin/plugin.c -lm \
-            vendor/tefkernel/include/tef_api_imp.c \
-            -o libplugin.android.arm64.so
-      - name: Build Runtime Module
-        run: |
-          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
-            -O2 -fPIC -fvisibility=hidden -Wall -Wextra -Werror \
-            -Iinclude -Ivendor/tefkernel/include -shared module/module.c \
-            vendor/tefkernel/include/tef_api_imp.c \
-            -o libmodule.android.arm64.so
-      - uses: actions/upload-artifact@v4
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
         with:
-          name: TEFUI-android-arm64
-          path: |
-            libplugin.android.arm64.so
-            libmodule.android.arm64.so
+          ndk-version: r28c
+      - name: Configure
+        run: >-
+          cmake -S . -B build/android-arm64 -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_SYSTEM_NAME=Android
+          -DCMAKE_ANDROID_NDK="$ANDROID_NDK_ROOT"
+          -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a
+          -DCMAKE_ANDROID_API=24
+      - name: Build
+        run: cmake --build build/android-arm64 --parallel
+      - name: Assemble TEFManager package
+        run: |
+          mkdir -p package/TEFUI/Resources/lib
+          so_file="$(find build/android-arm64 -type f -name 'libTEFUI.android.arm64.so' -print -quit)"
+          test -n "$so_file"
+          cp TEFUI/Info.json TEFUI/Manifest.json TEFUI/mymod.json package/TEFUI/
+          cp "$so_file" package/TEFUI/Resources/lib/libTEFUI.android.arm64.so
+      - name: Upload installable ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TEFUI-v0.1.0-android-arm64
+          path: package/TEFUI/
+          if-no-files-found: error

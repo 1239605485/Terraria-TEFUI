@@ -127,7 +127,10 @@ static bool draw_text_button(patch_handle_t layout, const char *text,
     patch_handle_t managed_text = patchlib_string_create(text);
     bool disabled = false;
     bool clicked = false;
-    void *args[] = {&layout, &managed_text, scale, &forced_pressed, &disabled};
+    /* ref float is an actual float* argument. libffi therefore needs the
+       address of storage containing that pointer, not the float storage. */
+    float *scale_ref = scale;
+    void *args[] = {&layout, &managed_text, &scale_ref, &forced_pressed, &disabled};
     patchlib_method_invoke_args(g_string_button_draw, PATCH_NULL, &clicked, args);
 
     patchlib_field_set_value(g_button_location_field, layout, &old_location);
@@ -163,8 +166,9 @@ static bool draw_slider(patch_handle_t layout, float x, float y, float *normaliz
     int max_value = 100;
     bool ignore_start_point = false;
     bool changed = false;
+    float *value_ref = normalized_value;
     void *args[] = {
-        &layout, &disable_pick, normalized_value, &g_drag_state, &null_backing_handler,
+        &layout, &disable_pick, &value_ref, &g_drag_state, &null_backing_handler,
         &force_over, &min_value, &max_value, &ignore_start_point
     };
     patchlib_method_invoke_args(g_gui_slider_draw, PATCH_NULL, &changed, args);

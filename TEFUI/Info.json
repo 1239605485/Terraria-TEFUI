@@ -2,21 +2,46 @@
   "pkgId": "celso.tefui",
   "name": "TEFUI 游戏内菜单",
   "author": "liuxin",
-  "version": "0.1.5",
-  "versionCode": 202608296,
-  "brieflyDescribe": "可点击开关和拖动滑块的 Terraria 游戏内菜单框架。",
-  "description": "在虚拟控制界面绘制 TEFUI 启动键，内置测试开关和测试滑块，为后续模组配置接入提供基础。",
+  "version": "0.1.6",
+  "versionCode": 202608297,
+  "brieflyDescribe": "修复游戏内 UI 不显示，并支持居中启动键与拖动。",
+  "description": "恢复已验证可见的绘制链路；启动键按 UI 缩放居中，支持拖动，屏幕/触控辅助解析失败时仍可绘制。菜单内容使用中文。",
   "features": [],
   "sizeCategory": "TINY",
   "targetGameVersion": "1.4.5.6.4",
   "minGameVersion": "1.4.5.6.4",
   "maxGameVersion": "1.4.5.6.4",
   "support": {
-    "android": {"arm64": true, "arm": false, "x64": false, "x86": false},
-    "windows": {"arm64": false, "arm": false, "x64": false, "x86": false},
-    "linux": {"arm64": false, "arm": false, "x64": false, "x86": false},
-    "mac": {"arm64": false, "arm": false, "x64": false, "x86": false},
-    "ios": {"arm64": false, "arm": false, "x64": false, "x86": false}
+    "android": {
+      "arm64": true,
+      "arm": false,
+      "x64": false,
+      "x86": false
+    },
+    "windows": {
+      "arm64": false,
+      "arm": false,
+      "x64": false,
+      "x86": false
+    },
+    "linux": {
+      "arm64": false,
+      "arm": false,
+      "x64": false,
+      "x86": false
+    },
+    "mac": {
+      "arm64": false,
+      "arm": false,
+      "x64": false,
+      "x86": false
+    },
+    "ios": {
+      "arm64": false,
+      "arm": false,
+      "x64": false,
+      "x86": false
+    }
   },
   "dependence": [],
   "conflicts": [],

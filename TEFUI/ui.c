@@ -29,7 +29,8 @@ typedef struct vector2_t {
 
 enum {
     CONTROL_ANCHOR_SCREEN = 0,
-    ANCHOR_TOP_LEFT = 9
+    ANCHOR_TOP_CENTRE = 10,
+    ANCHOR_CENTRE_BOTH = 18
 };
 
 static patch_hook_id_t g_draw_hook = PATCH_HOOK_INVALID_ID;
@@ -57,9 +58,9 @@ static patch_handle_t g_drag_state_type = PATCH_NULL;
 static patch_handle_t g_drag_state = PATCH_NULL;
 
 static bool g_menu_open = false;
-static float g_launcher_scale = 1.0f;
-static float g_close_scale = 1.0f;
-static float g_option_scales[TEFUI_MAX_OPTIONS];
+static bool g_launcher_down = false;
+static bool g_close_down = false;
+static bool g_option_down[TEFUI_MAX_OPTIONS];
 static bool g_runtime_ready = false;
 
 static bool valid_handle(patch_handle_t handle) {
@@ -103,8 +104,8 @@ static patch_handle_t get_borrowed_slider_layout(void) {
 
 static bool draw_text_button(patch_handle_t layout, const char *text,
                              float x, float y, float width, float height,
-                             float *scale, bool forced_pressed) {
-    if (!layout || !text || !scale || !valid_handle(g_string_button_draw)) return false;
+                             int anchor) {
+    if (!layout || !text || !valid_handle(g_string_button_draw)) return false;
 
     vector2_t old_location = {0};
     vector2_t old_size = {0};
@@ -118,7 +119,6 @@ static bool draw_text_button(patch_handle_t layout, const char *text,
     vector2_t location = {x, y};
     vector2_t size = {width, height};
     int anchor_control = CONTROL_ANCHOR_SCREEN;
-    int anchor = ANCHOR_TOP_LEFT;
     patchlib_field_set_value(g_button_location_field, layout, &location);
     patchlib_field_set_value(g_button_size_field, layout, &size);
     patchlib_field_set_value(g_button_anchor_control_field, layout, &anchor_control);
@@ -127,9 +127,11 @@ static bool draw_text_button(patch_handle_t layout, const char *text,
     patch_handle_t managed_text = patchlib_string_create(text);
     bool disabled = false;
     bool clicked = false;
+    bool forced_pressed = false;
+    float stable_scale = 1.0f;
     /* ref float is an actual float* argument. libffi therefore needs the
        address of storage containing that pointer, not the float storage. */
-    float *scale_ref = scale;
+    float *scale_ref = &stable_scale;
     void *args[] = {&layout, &managed_text, &scale_ref, &forced_pressed, &disabled};
     patchlib_method_invoke_args(g_string_button_draw, PATCH_NULL, &clicked, args);
 
@@ -140,7 +142,8 @@ static bool draw_text_button(patch_handle_t layout, const char *text,
     return clicked;
 }
 
-static bool draw_slider(patch_handle_t layout, float x, float y, float *normalized_value) {
+static bool draw_slider(patch_handle_t layout, float x, float y, int anchor,
+                        float *normalized_value) {
     if (!layout || !normalized_value || !g_drag_state || !valid_handle(g_gui_slider_draw)) {
         return false;
     }
@@ -154,7 +157,6 @@ static bool draw_slider(patch_handle_t layout, float x, float y, float *normaliz
 
     vector2_t location = {x, y};
     int anchor_control = CONTROL_ANCHOR_SCREEN;
-    int anchor = ANCHOR_TOP_LEFT;
     patchlib_field_set_value(g_slider_location_field, layout, &location);
     patchlib_field_set_value(g_slider_anchor_control_field, layout, &anchor_control);
     patchlib_field_set_value(g_slider_anchor_field, layout, &anchor);
@@ -179,20 +181,27 @@ static bool draw_slider(patch_handle_t layout, float x, float y, float *normaliz
     return changed;
 }
 
+static bool pressed_once(bool pressed, bool *was_pressed) {
+    const bool fire = pressed && !*was_pressed;
+    *was_pressed = pressed;
+    return fire;
+}
+
 static void draw_menu(void) {
     patch_handle_t button_layout = get_borrowed_button_layout();
     if (!button_layout) return;
 
-    if (draw_text_button(button_layout, g_menu_open ? "TEFUI [X]" : "TEFUI",
-                         18.0f, 118.0f, 150.0f, 46.0f,
-                         &g_launcher_scale, g_menu_open)) {
+    const bool launcher_pressed = draw_text_button(
+        button_layout, g_menu_open ? "TEFUI [X]" : "TEFUI",
+        0.0f, 118.0f, 170.0f, 46.0f, ANCHOR_TOP_CENTRE);
+    if (pressed_once(launcher_pressed, &g_launcher_down)) {
         g_menu_open = !g_menu_open;
     }
     if (!g_menu_open || !api_ready()) return;
 
     patch_handle_t slider_layout = get_borrowed_slider_layout();
     const int option_count = tefui_get_option_count();
-    float y = 178.0f;
+    float y = -120.0f;
 
     for (int i = 0; i < option_count && i < TEFUI_MAX_OPTIONS; ++i) {
         tefui_option_snapshot_t option;
@@ -203,15 +212,16 @@ static void draw_menu(void) {
         if (option.type == TEFUI_OPTION_TOGGLE) {
             snprintf(line, sizeof(line), "%s: %s", option.label,
                      option.bool_value ? "ON" : "OFF");
-            if (draw_text_button(button_layout, line, 18.0f, y, 390.0f, 46.0f,
-                                 &g_option_scales[i], option.bool_value)) {
+            const bool option_pressed = draw_text_button(
+                button_layout, line, 0.0f, y, 420.0f, 46.0f, ANCHOR_CENTRE_BOTH);
+            if (pressed_once(option_pressed, &g_option_down[i])) {
                 tefui_set_bool(option.owner_id, option.option_id, !option.bool_value);
             }
             y += 54.0f;
         } else if (option.type == TEFUI_OPTION_SLIDER) {
             snprintf(line, sizeof(line), "%s: %.1f", option.label, option.float_value);
-            (void)draw_text_button(button_layout, line, 18.0f, y, 390.0f, 40.0f,
-                                   &g_option_scales[i], false);
+            (void)draw_text_button(button_layout, line, 0.0f, y, 420.0f, 40.0f,
+                                   ANCHOR_CENTRE_BOTH);
             y += 42.0f;
             if (slider_layout) {
                 float range = option.max_value - option.min_value;
@@ -220,7 +230,8 @@ static void draw_menu(void) {
                     : 0.0f;
                 if (normalized < 0.0f) normalized = 0.0f;
                 if (normalized > 1.0f) normalized = 1.0f;
-                if (draw_slider(slider_layout, 38.0f, y, &normalized)) {
+                if (draw_slider(slider_layout, 0.0f, y, ANCHOR_CENTRE_BOTH,
+                                &normalized)) {
                     const float value = option.min_value + normalized * range;
                     tefui_set_float(option.owner_id, option.option_id, value);
                 }
@@ -229,8 +240,9 @@ static void draw_menu(void) {
         }
     }
 
-    if (draw_text_button(button_layout, "Close", 18.0f, y, 180.0f, 44.0f,
-                         &g_close_scale, false)) {
+    const bool close_pressed = draw_text_button(
+        button_layout, "Close", 0.0f, y, 180.0f, 44.0f, ANCHOR_CENTRE_BOTH);
+    if (pressed_once(close_pressed, &g_close_down)) {
         g_menu_open = false;
     }
 }
@@ -322,8 +334,9 @@ bool tefui_ui_initialize(void) {
     tefui_set_bool = tefui_set_bool_impl;
     tefui_get_float = tefui_get_float_impl;
     tefui_set_float = tefui_set_float_impl;
-    memset(g_option_scales, 0, sizeof(g_option_scales));
-    for (int i = 0; i < TEFUI_MAX_OPTIONS; ++i) g_option_scales[i] = 1.0f;
+    memset(g_option_down, 0, sizeof(g_option_down));
+    g_launcher_down = false;
+    g_close_down = false;
 
     if (!api_ready()) {
         fprintf(stderr, "[TEFUI] API plugin symbols are unavailable or incompatible.\n");

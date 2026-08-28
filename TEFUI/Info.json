@@ -1,0 +1,27 @@
+{
+  "pkgId": "celso.tefui",
+  "name": "TEFUI 游戏内菜单",
+  "author": "liuxin",
+  "version": "0.1.4",
+  "versionCode": 202608295,
+  "brieflyDescribe": "可点击开关和拖动滑块的 Terraria 游戏内菜单框架。",
+  "description": "在虚拟控制界面绘制 TEFUI 启动键，内置测试开关和测试滑块，为后续模组配置接入提供基础。",
+  "features": [],
+  "sizeCategory": "TINY",
+  "targetGameVersion": "1.4.5.6.4",
+  "minGameVersion": "1.4.5.6.4",
+  "maxGameVersion": "1.4.5.6.4",
+  "support": {
+    "android": {"arm64": true, "arm": false, "x64": false, "x86": false},
+    "windows": {"arm64": false, "arm": false, "x64": false, "x86": false},
+    "linux": {"arm64": false, "arm": false, "x64": false, "x86": false},
+    "mac": {"arm64": false, "arm": false, "x64": false, "x86": false},
+    "ios": {"arm64": false, "arm": false, "x64": false, "x86": false}
+  },
+  "dependence": [],
+  "conflicts": [],
+  "stableVerified": false,
+  "experimental": true,
+  "deprecated": false,
+  "hasExtendedContent": true
+}

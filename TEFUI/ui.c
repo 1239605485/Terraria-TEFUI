@@ -96,8 +96,11 @@ static bool g_launcher_down = false;
 static bool g_close_down = false;
 static bool g_option_down[TEFUI_MAX_OPTIONS];
 
-static float g_launcher_x_ratio = 0.5f;
-static float g_launcher_y_ratio = 0.5f;
+/* The target Android build reliably draws the borrowed Terraria layouts near
+   the left side.  Do not place the launcher in the centre: that coordinate can
+   be swallowed by the virtual-controls pass on some phones. */
+static float g_launcher_x_ratio = 0.14f;
+static float g_launcher_y_ratio = 0.34f;
 static bool g_pointer_was_down = false;
 static bool g_dragging_launcher = false;
 static bool g_launcher_moved = false;
@@ -693,7 +696,9 @@ static void draw_menu(void) {
     patch_handle_t slider_layout = get_borrowed_slider_layout();
     const int option_count = tefui_get_option_count();
     const float menu_half_width = 245.0f;
-    const float menu_x = clampf_local(ui_width * 0.5f, menu_half_width,
+    /* Keep every borrowed control on the proven-visible left-side strip by
+       default.  The launcher itself remains freely draggable after opening. */
+    const float menu_x = clampf_local(menu_half_width + 20.0f, menu_half_width,
                                      fmaxf(menu_half_width, ui_width - menu_half_width));
     float estimated_height = 48.0f + 54.0f + 94.0f + 52.0f;
     if (option_count > 2) estimated_height += (float)(option_count - 2) * 60.0f;
@@ -947,8 +952,8 @@ bool tefui_ui_initialize(void) {
     g_active_cursor_id = -2147483647;
     g_cursor_transform = -1;
     g_native_click_suppression_frames = 0;
-    g_launcher_x_ratio = 0.5f;
-    g_launcher_y_ratio = 0.5f;
+    g_launcher_x_ratio = 0.14f;
+    g_launcher_y_ratio = 0.34f;
     g_logged_first_draw = false;
     g_logged_missing_layout = false;
     g_logged_cursor_input = false;

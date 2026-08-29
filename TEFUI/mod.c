@@ -29,9 +29,9 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "celso.tefui",
-    .version_code = 202608299,
+    .version_code = 2026083010,
     .api_version = 1,
-    .version = "0.1.8"
+    .version = "0.1.9"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

@@ -1,12 +1,11 @@
-# TEFUI v0.1.8
+# TEFUI v0.1.9
 
-这是与 Resource Saver 相同结构的 KernelLoader Mod 源码工程。
+本版修复 Android UI 坐标与拖动。
 
-## GitHub 自动编译
+- 屏幕尺寸优先读取 `XNAUnityRunner.ScreenWidth/ScreenHeight`。
+- 按 `UIScale` 转成 Terraria UI 坐标。
+- 菜单强制限制在屏幕安全区域，避免左右裁切。
+- 手指持续按住 TEFUI 即可开始拖动，不再要求恰好捕获触摸按下第一帧。
+- 保留原生 `GUIStringButton` 点击与 `GUISlider` 滑块输入。
 
-1. 将压缩包内容上传到 GitHub 仓库根目录。
-2. 打开 Actions，运行 `Build TEFUI Android ARM64`。
-3. 下载 GitHub Actions 生成的 Android ARM64 artifact。
-4. 得到的 ZIP 根目录会直接包含 `Info.json`、`Manifest.json`、`mymod.json` 和 `Resources/lib/libTEFUI.android.arm64.so`，可导入 TEFManager。
-
-首次真机测试应确认：进入世界后屏幕中部出现 `TEFUI` 启动键；短按打开中文菜单，按住拖动可移动启动键。
+上传整个工程到 GitHub 后运行 `Build TEFUI Android ARM64` 即可编译。

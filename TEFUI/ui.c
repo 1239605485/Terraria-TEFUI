@@ -66,6 +66,8 @@ static patch_handle_t g_mouse_x_getter = PATCH_NULL;
 static patch_handle_t g_mouse_y_getter = PATCH_NULL;
 static patch_handle_t g_mouse_left_getter = PATCH_NULL;
 static patch_handle_t g_ui_scale_getter = PATCH_NULL;
+static patch_handle_t g_runner_screen_width_getter = PATCH_NULL;
+static patch_handle_t g_runner_screen_height_getter = PATCH_NULL;
 
 /* Main.screenWidth/screenHeight are temporarily rewritten while Terraria draws
    parts of the mobile UI. PlayerInput exposes the real back-buffer dimensions,
@@ -271,40 +273,62 @@ static void get_ui_metrics(float *ui_width, float *ui_height, float *ui_scale,
     int physical_h = 0;
     bool physical_ok = false;
 
-    int real_width = 0;
-    int real_height = 0;
-    if (read_static_int(g_real_screen_width_getter, &real_width) &&
-        read_static_int(g_real_screen_height_getter, &real_height) &&
-        real_width >= 320 && real_height >= 180) {
-        float candidate_scale = 1.0f;
-        if (!read_static_float(g_ui_scale_getter, &candidate_scale) ||
-            !isfinite(candidate_scale) || candidate_scale < 0.25f || candidate_scale > 4.0f) {
-            candidate_scale = 1.0f;
-        }
-        scale = candidate_scale;
-        width = (float)real_width / scale;
-        height = (float)real_height / scale;
-        if (!isfinite(width) || !isfinite(height) || width < 320.0f || height < 180.0f ||
-            width > 10000.0f || height > 10000.0f) {
-            width = (float)real_width;
-            height = (float)real_height;
-            scale = 1.0f;
-        }
-        physical_w = real_width;
-        physical_h = real_height;
+    float candidate_scale = 1.0f;
+    if (!read_static_float(g_ui_scale_getter, &candidate_scale) ||
+        !isfinite(candidate_scale) || candidate_scale < 0.25f || candidate_scale > 4.0f) {
+        candidate_scale = 1.0f;
+    }
+    scale = candidate_scale;
+
+    /* XNAUnityRunner owns the stable Android render surface. Main.screenWidth
+       and PlayerInput.RealScreenWidth may be temporary/virtual during this hook. */
+    int runner_width = 0;
+    int runner_height = 0;
+    if (read_static_int(g_runner_screen_width_getter, &runner_width) &&
+        read_static_int(g_runner_screen_height_getter, &runner_height) &&
+        runner_width >= 640 && runner_height >= 320) {
+        physical_w = runner_width;
+        physical_h = runner_height;
         physical_ok = true;
+        width = (float)runner_width / scale;
+        height = (float)runner_height / scale;
     } else {
-        /* Drawing must remain available even if the optional PlayerInput helper
-           cannot be resolved. Main's dimensions are only used when they look
-           like a real UI surface; tiny temporary values are deliberately
-           rejected instead of shoving the launcher against the left edge. */
-        int main_width = 0;
-        int main_height = 0;
-        if (read_static_int(g_screen_width_getter, &main_width) &&
-            read_static_int(g_screen_height_getter, &main_height) &&
-            main_width >= 320 && main_height >= 180) {
-            width = (float)main_width;
-            height = (float)main_height;
+        int real_width = 0;
+        int real_height = 0;
+        if (read_static_int(g_real_screen_width_getter, &real_width) &&
+            read_static_int(g_real_screen_height_getter, &real_height) &&
+            real_width >= 320 && real_height >= 180) {
+            physical_w = real_width;
+            physical_h = real_height;
+            physical_ok = true;
+            width = (float)real_width / scale;
+            height = (float)real_height / scale;
+        } else {
+            int main_width = 0;
+            int main_height = 0;
+            if (read_static_int(g_screen_width_getter, &main_width) &&
+                read_static_int(g_screen_height_getter, &main_height) &&
+                main_width >= 320 && main_height >= 180) {
+                width = (float)main_width;
+                height = (float)main_height;
+                scale = 1.0f;
+            }
+        }
+    }
+
+    if (!isfinite(width) || !isfinite(height) || width < 480.0f || height < 240.0f ||
+        width > 10000.0f || height > 10000.0f) {
+        if (physical_ok && physical_w >= 640 && physical_h >= 320) {
+            width = (float)physical_w;
+            height = (float)physical_h;
+            scale = 1.0f;
+        } else {
+            width = 960.0f;
+            height = 540.0f;
+            scale = 1.0f;
+            physical_w = 0;
+            physical_h = 0;
+            physical_ok = false;
         }
     }
 
@@ -499,8 +523,8 @@ static void draw_menu(void) {
 
     float launcher_x = g_launcher_x_ratio * ui_width;
     float launcher_y = g_launcher_y_ratio * ui_height;
-    launcher_x = clampf_local(launcher_x, 95.0f, fmaxf(95.0f, ui_width - 95.0f));
-    launcher_y = clampf_local(launcher_y, 30.0f, fmaxf(30.0f, ui_height - 30.0f));
+    launcher_x = clampf_local(launcher_x, 110.0f, fmaxf(110.0f, ui_width - 110.0f));
+    launcher_y = clampf_local(launcher_y, 40.0f, fmaxf(40.0f, ui_height - 40.0f));
 
     /* Android-safe interaction path: Terraria CursorManager exposes reference
        Cursor objects with Position/Down/WasDown fields. This avoids the v0.1.7
@@ -532,13 +556,13 @@ static void draw_menu(void) {
                     }
 
                     launcher_x = clampf_local(pointer_x + g_drag_offset_x,
-                                              95.0f, fmaxf(95.0f, ui_width - 95.0f));
+                                              110.0f, fmaxf(110.0f, ui_width - 110.0f));
                     launcher_y = clampf_local(pointer_y + g_drag_offset_y,
-                                              30.0f, fmaxf(30.0f, ui_height - 30.0f));
+                                              40.0f, fmaxf(40.0f, ui_height - 40.0f));
                     g_launcher_x_ratio = ui_width > 0.0f ? launcher_x / ui_width : 0.5f;
                     g_launcher_y_ratio = ui_height > 0.0f ? launcher_y / ui_height : 0.5f;
                 }
-            } else if (sample.was_down) {
+            } else {
                 cursor_released_this_frame = true;
             }
             break;
@@ -562,8 +586,7 @@ static void draw_menu(void) {
     if (!g_dragging_launcher && !cursor_released_this_frame) {
         for (int i = 0; i < cursor_count; ++i) {
             cursor_sample_t sample;
-            if (!get_cursor_sample(cursor_manager, i, &sample) || sample.ignore ||
-                !sample.down || sample.was_down) {
+            if (!get_cursor_sample(cursor_manager, i, &sample) || !sample.down) {
                 continue;
             }
 
@@ -619,9 +642,9 @@ static void draw_menu(void) {
                 const float move_y = pointer_y - g_drag_start_y;
                 if (move_x * move_x + move_y * move_y > 144.0f) g_launcher_moved = true;
                 launcher_x = clampf_local(pointer_x + g_drag_offset_x,
-                                          95.0f, fmaxf(95.0f, ui_width - 95.0f));
+                                          110.0f, fmaxf(110.0f, ui_width - 110.0f));
                 launcher_y = clampf_local(pointer_y + g_drag_offset_y,
-                                          30.0f, fmaxf(30.0f, ui_height - 30.0f));
+                                          40.0f, fmaxf(40.0f, ui_height - 40.0f));
                 g_launcher_x_ratio = launcher_x / ui_width;
                 g_launcher_y_ratio = launcher_y / ui_height;
             }
@@ -669,8 +692,13 @@ static void draw_menu(void) {
 
     patch_handle_t slider_layout = get_borrowed_slider_layout();
     const int option_count = tefui_get_option_count();
-    const float menu_x = ui_width * 0.5f;
-    float y = ui_height * 0.28f;
+    const float menu_half_width = 245.0f;
+    const float menu_x = clampf_local(ui_width * 0.5f, menu_half_width,
+                                     fmaxf(menu_half_width, ui_width - menu_half_width));
+    float estimated_height = 48.0f + 54.0f + 94.0f + 52.0f;
+    if (option_count > 2) estimated_height += (float)(option_count - 2) * 60.0f;
+    float y = ui_height * 0.22f;
+    y = clampf_local(y, 55.0f, fmaxf(55.0f, ui_height - estimated_height - 35.0f));
 
     /* Chinese menu header. */
     float header_scale = 1.0f;
@@ -734,6 +762,7 @@ static void draw_virtual_controls_postfix(patch_handle_t instance, void **args,
 
 static bool resolve_runtime(void) {
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
+    patch_handle_t xna_runner_type = patchlib_type_get_type("", "XNAUnityRunner");
     patch_handle_t draw_virtual_controls = main_type
         ? patchlib_type_get_method_by_param_count(main_type, "DrawVirtualControls", 0)
         : PATCH_NULL;
@@ -757,6 +786,13 @@ static bool resolve_runtime(void) {
         : PATCH_NULL;
     g_ui_scale_getter = main_type
         ? patchlib_type_get_method_by_param_count(main_type, "get_UIScale", 0)
+        : PATCH_NULL;
+
+    g_runner_screen_width_getter = xna_runner_type
+        ? patchlib_type_get_method_by_param_count(xna_runner_type, "get_ScreenWidth", 0)
+        : PATCH_NULL;
+    g_runner_screen_height_getter = xna_runner_type
+        ? patchlib_type_get_method_by_param_count(xna_runner_type, "get_ScreenHeight", 0)
         : PATCH_NULL;
 
     /* Stable screen metrics. Main.screenWidth/screenHeight are temporarily
@@ -868,8 +904,10 @@ static bool resolve_runtime(void) {
     if (mod_logger_write) {
         mod_logger_write(g_draw_hook != PATCH_HOOK_INVALID_ID ? MOD_LOG_LEVEL_INFO : MOD_LOG_LEVEL_ERROR,
                          "TEFUI",
-                         "DrawVirtualControls hook %s; realScreen=%d cursor=%d MainScreen=%d mouse=%d UIScale=%d",
+                         "DrawVirtualControls hook %s; xnaScreen=%d realScreen=%d cursor=%d MainScreen=%d mouse=%d UIScale=%d",
                          g_draw_hook != PATCH_HOOK_INVALID_ID ? "installed" : "failed",
+                         valid_handle(g_runner_screen_width_getter) &&
+                             valid_handle(g_runner_screen_height_getter),
                          valid_handle(g_real_screen_width_getter) &&
                              valid_handle(g_real_screen_height_getter),
                          cursor_input_ready(),

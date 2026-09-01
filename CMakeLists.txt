@@ -1,41 +1,48 @@
-cmake_minimum_required(VERSION 3.22.1)
-project("TEFUI" C)
-set(CMAKE_C_STANDARD 11)
-include_directories(${CMAKE_SOURCE_DIR}/mod-api)
+cmake_minimum_required(VERSION 3.22)
+project(tefui_plugin C CXX)
 
-macro(add_terraria_mod MOD_NAME)
-    add_library(${MOD_NAME} SHARED
-        ${CMAKE_SOURCE_DIR}/mod-api/tefkernel/tef_api_imp.c
-        ${ARGN})
-    target_include_directories(${MOD_NAME} PRIVATE
-        ${CMAKE_SOURCE_DIR}/mod-api
-        ${CMAKE_SOURCE_DIR}/TEFUI)
-    target_link_libraries(${MOD_NAME} m)
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
-        set(LOCAL_SYSTEM "android")
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        set(LOCAL_SYSTEM "linux")
+set(TEFKERNEL_DIR "" CACHE PATH "Path to an extracted TEFKernel-main source tree")
+if (NOT EXISTS "${TEFKERNEL_DIR}/include/tef_api.h")
+    message(FATAL_ERROR "TEFKERNEL_DIR must point to an extracted TEFKernel-main directory")
+endif()
+
+add_library(tefui SHARED
+        src/tef_api_imp.c
+        src/tefui_plugin.cpp
+)
+
+target_include_directories(tefui PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${TEFKERNEL_DIR}/include
+)
+
+target_compile_definitions(tefui PRIVATE TEFUI_PLUGIN_BUILD)
+
+if (ANDROID)
+    target_link_libraries(tefui PRIVATE log dl)
+    set(TEFUI_PLATFORM "android")
+    set(TEFUI_ARCH "${ANDROID_ABI}")
+elseif (WIN32)
+    set(TEFUI_PLATFORM "windows")
+    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(TEFUI_ARCH "x64")
     else()
-        string(TOLOWER "${CMAKE_SYSTEM_NAME}" LOCAL_SYSTEM)
+        set(TEFUI_ARCH "x86")
     endif()
+elseif (APPLE)
+    set(TEFUI_PLATFORM "mac")
+    set(TEFUI_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+else()
+    set(TEFUI_PLATFORM "linux")
+    set(TEFUI_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
 
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-        set(LOCAL_ARCH "arm64")
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
-        set(LOCAL_ARCH "x64")
-    else()
-        set(LOCAL_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
-    endif()
+set_target_properties(tefui PROPERTIES
+        OUTPUT_NAME "tefui.${TEFUI_PLATFORM}.${TEFUI_ARCH}"
+        PREFIX ""
+)
 
-    set_target_properties(${MOD_NAME} PROPERTIES
-        OUTPUT_NAME "${MOD_NAME}.${LOCAL_SYSTEM}.${LOCAL_ARCH}"
-        SUFFIX ".so")
-
-    if(CMAKE_BUILD_TYPE STREQUAL "Release" AND (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
-        add_custom_command(TARGET ${MOD_NAME} POST_BUILD
-            COMMAND ${CMAKE_STRIP} --strip-all $<TARGET_FILE:${MOD_NAME}>)
-    endif()
-endmacro()
-
-add_subdirectory(TEFUI)

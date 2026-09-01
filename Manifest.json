@@ -1,0 +1,8 @@
+{
+  "type": "Plugin",
+  "file": "Resources/lib/tefui.android.arm64-v8a.so",
+  "resources": "Resources",
+  "tefkernel": {
+    "minVersion": "1.0.1"
+  }
+}

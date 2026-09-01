@@ -1,0 +1,22 @@
+{
+  "pkgId": "eternal.future.tefui",
+  "name": "TEF 游戏内模组控制面板",
+  "author": "eternalfuture-e38299",
+  "description": "为其他 TEFKernel 模组提供功能开关注册 API，并在 Android 游戏内显示悬浮入口和控制面板。",
+  "brieflyDescribe": "游戏内模组开关面板",
+  "version": "0.1.0",
+  "versionCode": 2026083101,
+  "detailsURL": "",
+  "dependence": [],
+  "support": {
+    "android": { "arm64": true, "arm": false },
+    "windows": { "x64": false, "x86": false },
+    "linux": { "x64": false, "x86": false },
+    "mac": { "arm64": false, "x64": false },
+    "ios": { "arm64": false }
+  },
+  "features": ["UI_IMPROVEMENT"],
+  "experimental": true,
+  "deprecated": false
+}
+

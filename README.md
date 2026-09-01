@@ -2,6 +2,8 @@
 
 这是一个面向 TEFKernel 的 Android Plugin 原型，目标是让其他 KernelLoader Mod 注册功能开关，并在游戏内提供一个入口按钮和控制面板。
 
+> 重要：必须使用本项目 Actions 重新生成的 `TEFUI-plugin` 包。旧版把裸 `.so` 放在外层 ZIP 中，TEFManager 可以接收但 TEFKernel 无法加载。
+
 ## 当前功能
 
 - 游戏进程内显示可拖动的 `T` 悬浮按钮；
@@ -9,7 +11,7 @@
 - 其他模组可注册多个功能开关；
 - 开关变化时回调模组自己的 C 函数；
 - 不需要 `SYSTEM_ALERT_WINDOW` 权限：UI 添加到当前 Activity 的 `decorView`；
-- Android arm64-v8a；桌面端接口保留但 UI 暂不可用。
+- Android arm64-v8a。
 
 ## Mod 接入示例
 
@@ -56,11 +58,7 @@ cmake -S . -B build -DTEFKERNEL_DIR=/path/to/TEFKernel-main
 cmake --build build --config Release
 ```
 
-输出库需要放入 Plugin 包的 `Resources/lib/`，命名为：
-
-```text
-tefui.android.arm64-v8a.so
-```
+构建流程会先生成 `tefui.android.arm64-v8a.so`，再使用 TEFPkg-Tool 将它打包为 Kernel 可以加载的 `tefui.tefpkg`。最终交给 TEFManager 安装的是外层 `TEFUI-plugin.zip`，不是裸 `.so`。
 
 项目已经附带 `.github/workflows/build.yml`。上传整个目录到 GitHub 后，在仓库的 Actions 页面手动运行 `Build TEFUI Plugin`，或推送到 `main` 分支即可自动编译。工作流会分别输出两个 Artifact：
 

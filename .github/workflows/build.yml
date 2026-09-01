@@ -92,5 +92,11 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tefui-android-arm64
-          path: dist/
+          name: tefui-plugin-android-arm64
+          path: dist/plugin/
+
+      - name: Upload loader DEX separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: tefloader-dex-with-tefui-bridge
+          path: dist/tefloader.dex

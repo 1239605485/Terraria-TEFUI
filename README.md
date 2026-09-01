@@ -62,7 +62,12 @@ cmake --build build --config Release
 tefui.android.arm64-v8a.so
 ```
 
-项目已经附带 `.github/workflows/build.yml`。上传整个目录到 GitHub 后，在仓库的 Actions 页面手动运行 `Build TEFUI Plugin`，或推送到 `main` 分支即可自动编译。构建结果会作为 `tefui-android-arm64` artifact 提供下载，里面包含 Native Plugin、`tefloader.dex` 和插件 ZIP。
+项目已经附带 `.github/workflows/build.yml`。上传整个目录到 GitHub 后，在仓库的 Actions 页面手动运行 `Build TEFUI Plugin`，或推送到 `main` 分支即可自动编译。工作流会分别输出两个 Artifact：
+
+- `tefui-plugin-android-arm64`：下载得到的 ZIP 可直接交给 TEFManager 安装，根目录含 `Manifest.json`；
+- `tefloader-dex-with-tefui-bridge`：需要合入 TEFManager/loader 的 `tefloader.dex`。
+
+请不要把两个 Artifact 再合并后交给 TEFManager；`tefloader.dex` 不属于插件包。
 
 `android-bridge/src/.../TefUiBridge.java` 需要复制到 `TEFKernel-main/tefloader/android-java/src/eternal/future/tefkernel/`，再加入 TEFKernel loader 的 `tefloader.dex`。这是因为 Native Plugin 只能加载进程内的共享库，不能自行把 Java 类注入宿主 ClassLoader。加入后重新生成 `tefloader.dex`，再把它替换到 TEFManager 的 Android assets 中；现有 `build.sh` 会自动查找并编译这个 Java 文件，不需要改构建脚本。
 

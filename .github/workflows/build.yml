@@ -55,6 +55,27 @@ jobs:
             -DANDROID_PLATFORM=android-24
           cmake --build build-arm64 --parallel 2
 
+      - name: Build TEFPkg-Tool
+        shell: bash
+        run: |
+          mkdir -p third_party/tefpkg-tool
+          curl -L --fail --retry 3 \
+            "https://github.com/eternalfuture-e38299/TEFPkg-Tool/archive/refs/heads/main.zip" \
+            -o /tmp/tefpkg-tool.zip
+          unzip -q /tmp/tefpkg-tool.zip -d third_party/tefpkg-tool
+          tool_dir="$(find "$GITHUB_WORKSPACE/third_party/tefpkg-tool" -type f -name main.cpp -print -quit | sed 's#/main.cpp##')"
+          test -n "$tool_dir"
+          mkdir -p "$GITHUB_WORKSPACE/tefpkg-build"
+          for source in compressor lz4 lz4hc siphash tefpkg; do
+            gcc -std=c11 -O3 -DNDEBUG -I"$tool_dir/libs" \
+              -c "$tool_dir/libs/$source.c" \
+              -o "$GITHUB_WORKSPACE/tefpkg-build/$source.o"
+          done
+          g++ -std=c++17 -O3 -DNDEBUG \
+            "$tool_dir/main.cpp" "$tool_dir/tool.cpp" \
+            "$GITHUB_WORKSPACE/tefpkg-build"/*.o \
+            -I"$tool_dir" -o "$GITHUB_WORKSPACE/tefpkg_tool"
+
       - name: Add Java UI bridge and build loader DEX
         shell: bash
         run: |
@@ -83,9 +104,10 @@ jobs:
       - name: Assemble artifacts
         shell: bash
         run: |
-          mkdir -p dist/plugin/Resources/lib
+          mkdir -p dist/plugin package-input
           cp Manifest.json Info.json dist/plugin/
-          cp build-arm64/tefui.android.arm64-v8a.so dist/plugin/Resources/lib/
+          cp build-arm64/tefui.android.arm64-v8a.so package-input/libplugin.android.arm64.so
+          "$GITHUB_WORKSPACE/tefpkg_tool" build package-input dist/plugin/tefui.tefpkg 0x114514 -n
           cp "$TEFKERNEL_DIR/tefloader/android-java/build/output/tefloader.dex" dist/tefloader.dex
           (cd dist/plugin && zip -qr "$GITHUB_WORKSPACE/dist/TEFUI-plugin.zip" .)
 

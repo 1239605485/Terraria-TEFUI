@@ -1,1 +1,96 @@
-a
+name: Build TEFUI Plugin
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout TEFUI source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.0.13004108"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.0.13004108" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmake/3.22.1/bin" >> "$GITHUB_PATH"
+
+      - name: Download TEFKernel headers and loader sources
+        shell: bash
+        run: |
+          mkdir -p third_party
+          curl -L --fail --retry 3 \
+            "https://github.com/eternalfuture-e38299/tefkernel/archive/refs/heads/main.zip" \
+            -o /tmp/tefkernel.zip
+          unzip -q /tmp/tefkernel.zip -d third_party
+          kernel_dir="$(find "$GITHUB_WORKSPACE/third_party" -type f -path '*/include/tef_api.h' -print -quit | sed 's#/include/tef_api.h##')"
+          test -n "$kernel_dir"
+          echo "TEFKERNEL_DIR=$kernel_dir" >> "$GITHUB_ENV"
+
+      - name: Configure and build native Plugin
+        shell: bash
+        run: |
+          cmake -S . -B build-arm64 -G Ninja \
+            -DTEFKERNEL_DIR="$TEFKERNEL_DIR" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24
+          cmake --build build-arm64 --parallel 2
+
+      - name: Add Java UI bridge and build loader DEX
+        shell: bash
+        run: |
+          bridge_dir="$TEFKERNEL_DIR/tefloader/android-java/src/eternal/future/tefkernel"
+          mkdir -p "$bridge_dir"
+          cp android-bridge/src/eternal/future/tefkernel/TefUiBridge.java "$bridge_dir/TefUiBridge.java"
+          cd "$TEFKERNEL_DIR/tefloader/android-java"
+          cat > config.env <<EOF
+          JAVA_HOME=$JAVA_HOME
+          ANDROID_SDK=$ANDROID_SDK_ROOT
+          BUILD_TOOLS=35.0.0
+          PLATFORM=android-35
+          MIN_API=24
+          JAVAC=$JAVA_HOME/bin/javac
+          JAR=$JAVA_HOME/bin/jar
+          D8=$ANDROID_SDK_ROOT/build-tools/35.0.0/d8
+          PROJECT_ROOT=$(pwd)
+          SRC_DIR=$(pwd)/src
+          BUILD_DIR=$(pwd)/build
+          OUTPUT_DIR=$(pwd)/build/output
+          LIBS_DIR=$(pwd)/build/libs
+          ANDROID_JAR=$ANDROID_SDK_ROOT/platforms/android-35/android.jar
+          EOF
+          bash build.sh
+
+      - name: Assemble artifacts
+        shell: bash
+        run: |
+          mkdir -p dist/plugin/Resources/lib
+          cp Manifest.json Info.json dist/plugin/
+          cp build-arm64/tefui.android.arm64-v8a.so dist/plugin/Resources/lib/
+          cp "$TEFKERNEL_DIR/tefloader/android-java/build/output/tefloader.dex" dist/tefloader.dex
+          (cd dist/plugin && zip -qr "$GITHUB_WORKSPACE/dist/TEFUI-plugin.zip" .)
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tefui-android-arm64
+          path: dist/
